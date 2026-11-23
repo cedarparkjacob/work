@@ -1,3 +1,139 @@
+(async function () {
+
+async function chooseClassForTool(classLinks, toolName) {
+  if (!classLinks.length) return null;
+  if (classLinks.length === 1) return classLinks[0];
+
+  return new Promise(resolve => {
+    const modal = document.createElement("div");
+    modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000005;display:flex;align-items:center;justify-content:center;font-family:Arial;";
+    const panel = document.createElement("div");
+    panel.style.cssText = "background:#fff;width:min(560px,92vw);max-height:82vh;display:flex;flex-direction:column;border-radius:9px;box-shadow:0 12px 40px rgba(0,0,0,.35);overflow:hidden;";
+    const heading = document.createElement("div");
+    heading.textContent = "Choose a class — " + toolName;
+    heading.style.cssText = "background:#003b70;color:white;padding:16px;font-size:19px;font-weight:bold;";
+    const list = document.createElement("div");
+    list.style.cssText = "overflow:auto;padding:8px;";
+    classLinks.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = item.label;
+      button.style.cssText = "display:block;width:100%;text-align:left;padding:13px 14px;margin:3px 0;border:1px solid #ddd;border-radius:5px;background:#fff;cursor:pointer;font-size:15px;";
+      button.onmouseenter = () => button.style.background = "#eef5ff";
+      button.onmouseleave = () => button.style.background = "#fff";
+      button.onclick = () => { modal.remove(); resolve(item); };
+      list.appendChild(button);
+    });
+    const footer = document.createElement("div");
+    footer.style.cssText = "padding:10px;text-align:right;border-top:1px solid #ddd;";
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    cancel.style.cssText = "padding:8px 16px;cursor:pointer;";
+    cancel.onclick = () => { modal.remove(); resolve(null); };
+    footer.appendChild(cancel);
+    panel.append(heading, list, footer);
+    modal.appendChild(panel);
+    modal.addEventListener("click", event => {
+      if (event.target === modal) { modal.remove(); resolve(null); }
+    });
+    document.body.appendChild(modal);
+  });
+}
+
+function parseClassRosterInit(html) {
+  const marker = "SunGard.Tac.ClassRoster.Init(";
+  const markerAt = html.indexOf(marker);
+  if (markerAt < 0) throw new Error("Class roster initialization data was not found.");
+
+  const start = markerAt + marker.length - 1;
+  let depth = 0, quote = null, escaped = false, end = -1;
+
+  for (let i = start; i < html.length; i++) {
+    const ch = html[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\\\") escaped = true;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) throw new Error("Could not parse class roster initialization data.");
+
+  const source = html.slice(start + 1, end);
+  const args = [];
+  let segmentStart = 0;
+  let parens = 0, braces = 0, brackets = 0;
+  quote = null; escaped = false;
+
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\\\") escaped = true;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+    if (ch === "(") parens++;
+    else if (ch === ")") parens--;
+    else if (ch === "{") braces++;
+    else if (ch === "}") braces--;
+    else if (ch === "[") brackets++;
+    else if (ch === "]") brackets--;
+    else if (ch === "," && parens === 0 && braces === 0 && brackets === 0) {
+      args.push(source.slice(segmentStart, i).trim());
+      segmentStart = i + 1;
+    }
+  }
+  args.push(source.slice(segmentStart).trim());
+
+  const records = JSON.parse(args[3]);
+  if (!Array.isArray(records)) throw new Error("The class roster data was not an array.");
+  return records;
+}
+
+async function getClassStudentsForTool(toolName) {
+  const links = [...document.querySelectorAll('a[href*="/TAC/ClassRoster?SectionKey="]')]
+    .map(a => ({
+      label: a.textContent.trim(),
+      href: a.href
+    }))
+    .filter(item => item.label && item.href);
+
+  if (!links.length) {
+    return [...document.querySelectorAll(".sg-student-link")]
+      .map(link => ({
+        id: link.getAttribute("studentid"),
+        name: link.textContent.trim(),
+        element: link,
+        record: null
+      }))
+      .filter(student => student.id && student.name.length > 2)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  const selected = await chooseClassForTool(links, toolName);
+  if (!selected) return null;
+
+  const response = await fetch(selected.href, { credentials: "same-origin" });
+  if (!response.ok) throw new Error("Could not load the selected class roster (HTTP " + response.status + ").");
+  const html = await response.text();
+  const records = parseClassRosterInit(html);
+
+  return records
+    .filter(record => record.StudentId && record.StudentNameLastFirst)
+    .map(record => ({
+      id: String(record.StudentId),
+      name: String(record.StudentNameLastFirst),
+      element: null,
+      record
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 
 
 /* ================= OVERLAY ================= */
@@ -155,14 +291,8 @@ let fitMode = false;
 let seatScale = 1;
 let textScale = 1;
 
-const students =
-[...document.querySelectorAll(".sg-student-link")]
-.map(link => ({
-    id: link.getAttribute("studentid"),
-    name: link.textContent.trim()
-}))
-.filter(s => s.id)
-.sort((a,b)=>a.name.localeCompare(b.name));
+const students = await getClassStudentsForTool("Seating Chart");
+if (!students) return;
 
 students.forEach(student => {
 
@@ -1481,3 +1611,5 @@ updateSeatSize();
 render();
 
 
+
+})();
