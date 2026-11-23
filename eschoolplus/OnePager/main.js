@@ -1,97 +1,205 @@
+(async function () {
+
+async function chooseClassForTool(classLinks, toolName) {
+  if (!classLinks.length) return null;
+  if (classLinks.length === 1) return classLinks[0];
+
+  return new Promise(resolve => {
+    const modal = document.createElement("div");
+    modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000005;display:flex;align-items:center;justify-content:center;font-family:Arial;";
+    const panel = document.createElement("div");
+    panel.style.cssText = "background:#fff;width:min(560px,92vw);max-height:82vh;display:flex;flex-direction:column;border-radius:9px;box-shadow:0 12px 40px rgba(0,0,0,.35);overflow:hidden;";
+    const heading = document.createElement("div");
+    heading.textContent = "Choose a class — " + toolName;
+    heading.style.cssText = "background:#003b70;color:white;padding:16px;font-size:19px;font-weight:bold;";
+    const list = document.createElement("div");
+    list.style.cssText = "overflow:auto;padding:8px;";
+    classLinks.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = item.label;
+      button.style.cssText = "display:block;width:100%;text-align:left;padding:13px 14px;margin:3px 0;border:1px solid #ddd;border-radius:5px;background:#fff;cursor:pointer;font-size:15px;";
+      button.onmouseenter = () => button.style.background = "#eef5ff";
+      button.onmouseleave = () => button.style.background = "#fff";
+      button.onclick = () => { modal.remove(); resolve(item); };
+      list.appendChild(button);
+    });
+    const footer = document.createElement("div");
+    footer.style.cssText = "padding:10px;text-align:right;border-top:1px solid #ddd;";
+    const cancel = document.createElement("button");
+    cancel.textContent = "Cancel";
+    cancel.style.cssText = "padding:8px 16px;cursor:pointer;";
+    cancel.onclick = () => { modal.remove(); resolve(null); };
+    footer.appendChild(cancel);
+    panel.append(heading, list, footer);
+    modal.appendChild(panel);
+    modal.addEventListener("click", event => {
+      if (event.target === modal) { modal.remove(); resolve(null); }
+    });
+    document.body.appendChild(modal);
+  });
+}
+
+function parseClassRosterInit(html) {
+  const marker = "SunGard.Tac.ClassRoster.Init(";
+  const markerAt = html.indexOf(marker);
+  if (markerAt < 0) throw new Error("Class roster initialization data was not found.");
+
+  const start = markerAt + marker.length - 1;
+  let depth = 0, quote = null, escaped = false, end = -1;
+
+  for (let i = start; i < html.length; i++) {
+    const ch = html[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\\\") escaped = true;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+    if (ch === "(") depth++;
+    else if (ch === ")" && --depth === 0) { end = i; break; }
+  }
+  if (end < 0) throw new Error("Could not parse class roster initialization data.");
+
+  const source = html.slice(start + 1, end);
+  const args = [];
+  let segmentStart = 0;
+  let parens = 0, braces = 0, brackets = 0;
+  quote = null; escaped = false;
+
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (ch === "\\\\") escaped = true;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") { quote = ch; continue; }
+    if (ch === "(") parens++;
+    else if (ch === ")") parens--;
+    else if (ch === "{") braces++;
+    else if (ch === "}") braces--;
+    else if (ch === "[") brackets++;
+    else if (ch === "]") brackets--;
+    else if (ch === "," && parens === 0 && braces === 0 && brackets === 0) {
+      args.push(source.slice(segmentStart, i).trim());
+      segmentStart = i + 1;
+    }
+  }
+  args.push(source.slice(segmentStart).trim());
+
+  const records = JSON.parse(args[3]);
+  if (!Array.isArray(records)) throw new Error("The class roster data was not an array.");
+  return records;
+}
+
+async function getClassStudentsForTool(toolName) {
+  const links = [...document.querySelectorAll('a[href*="/TAC/ClassRoster?SectionKey="]')]
+    .map(a => ({
+      label: a.textContent.trim(),
+      href: a.href
+    }))
+    .filter(item => item.label && item.href);
+
+  if (!links.length) {
+    return [...document.querySelectorAll(".sg-student-link")]
+      .map(link => ({
+        id: link.getAttribute("studentid"),
+        name: link.textContent.trim(),
+        element: link,
+        record: null
+      }))
+      .filter(student => student.id && student.name.length > 2)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  const selected = await chooseClassForTool(links, toolName);
+  if (!selected) return null;
+
+  const response = await fetch(selected.href, { credentials: "same-origin" });
+  if (!response.ok) throw new Error("Could not load the selected class roster (HTTP " + response.status + ").");
+  const html = await response.text();
+  const records = parseClassRosterInit(html);
+
+  return records
+    .filter(record => record.StudentId && record.StudentNameLastFirst)
+    .map(record => ({
+      id: String(record.StudentId),
+      name: String(record.StudentNameLastFirst),
+      element: null,
+      record
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
 
 
 
 /* The key: $("#SDD-ViewableStudentsList") .val("933216") .change(); */
 
 
-let students = []; 
-let currentStudent = null; 
-function showStudentPicker() {
 
-students =
-[...document.querySelectorAll(".sg-student-link")]
-.map(link => ({
-name: link.textContent.trim(),
-id: link.getAttribute("studentid"),
-element: link
-}))
-.filter(student => student.name.length > 2 && !student.name.match(/^\d+$/)) 
-.sort((a,b)=>a.name.localeCompare(b.name)); 
+let students = [];
+let currentStudent = null;
 
-const picker = document.createElement("div");
-picker.id = "StudentPicker";
+async function showStudentPicker() {
+  const picker = document.createElement("div");
+  picker.id = "StudentPicker";
+  picker.style.cssText = "position:fixed;inset:40px;background:white;z-index:999999;border:2px solid #444;display:flex;flex-direction:column;font-family:Arial;box-shadow:0 0 20px rgba(0,0,0,.35);";
 
-picker.style.cssText = `
-position:fixed;
-inset:40px;
-background:white;
-z-index:999999;
-border:2px solid #444;
-display:flex;
-flex-direction:column;
-font-family:Arial;
-`;
+  const title = document.createElement("div");
+  title.textContent = "Choose Student";
+  title.style.cssText = "background:#003b70;color:white;padding:12px;font-size:20px;font-weight:bold;";
+  picker.appendChild(title);
 
-const title = document.createElement("div");
-title.textContent="ChooseStudent";title.style.cssText="background:#003b70;color:white;padding:12px;font-size:20px;font-weight:bold;";
+  const search = document.createElement("input");
+  search.placeholder = "Search students...";
+  search.style.cssText = "margin:10px;padding:8px;font-size:16px;";
+  picker.appendChild(search);
 
-picker.appendChild(title);
+  const list = document.createElement("div");
+  list.style.cssText = "flex:1;overflow:auto;";
+  picker.appendChild(list);
 
-const search=document.createElement("input");
-search.placeholder="Search...";
-search.style.cssText="margin:10px;padding:8px;font-size:16px;";
+  function render(filter = "") {
+    list.innerHTML = "";
+    students
+      .filter(s => s.name.toLowerCase().includes(filter.toLowerCase()))
+      .forEach(student => {
+        const row = document.createElement("div");
+        row.textContent = student.name;
+        row.style.cssText = "padding:10px 12px;border-bottom:1px solid #ddd;cursor:pointer;";
+        row.onmouseenter = () => row.style.background = "#eef5ff";
+        row.onmouseleave = () => row.style.background = "white";
+        row.onclick = () => {
+          picker.remove();
+          loadStudent(student);
+        };
+        list.appendChild(row);
+      });
+  }
 
-picker.appendChild(search);
-
-const list=document.createElement("div");
-list.style.cssText="flex:1;overflow:auto;";
-
-picker.appendChild(list);
-
-
-function render(filter=""){
-
-list.innerHTML="";
-
-students
-.filter(s=>s.name.toLowerCase().includes(filter.toLowerCase()))
-.forEach(student=>{
-
-const row=document.createElement("div");
-
-row.textContent=student.name;
-
-row.style.cssText="padding:8px 12px;border-bottom:1px solid #ddd;cursor:pointer;";
-
-row.onmouseenter=()=>row.style.background="#eef5ff";
-row.onmouseleave=()=>row.style.background="white";
-
-row.onclick=()=>{
-
-picker.remove();
-
-loadStudent(student); 
-};
-
-list.appendChild(row);
-
-});
-
+  render();
+  search.oninput = () => render(search.value);
+  document.body.appendChild(picker);
+  search.focus();
 }
 
-render();
-
-search.oninput=()=>render(search.value);
-
-document.body.appendChild(picker);
-
-search.focus();
-
-} 
-
-
-
-
+async function initializeOnePager() {
+  try {
+    students = await getClassStudentsForTool("Student One Pager") || [];
+    if (!students.length) {
+      alert("No students were found for the selected class.");
+      return;
+    }
+    await initializeOnePager();
+  } catch (error) {
+    console.error("One Pager class loading failed:", error);
+    alert("Unable to load the selected class roster. See the console for details.");
+  }
+}
 
 function getText(id){
 
@@ -145,18 +253,25 @@ check();
 /*                    Wait for autoclick to open student drawer then run launchOnePager       */
 
 function loadStudent(student) {
+  currentStudent = student;
 
-   currentStudent = student;
+  const drawer = window.SunGard?.Tac?.StudentDetailsDrawer;
+  if (!drawer) {
+    alert("The Student Details Drawer is unavailable on this page.");
+    return;
+  }
 
-   student.element.click();
+  drawer.Open(student.id);
 
-   waitForElement("#SDD-QV-FullScheduleLink")
-   .then(() => {
-
-       launchOnePager();
-
+  waitForElement(
+    "#SDD-StudentId",
+    () => getText("SDD-StudentId") === String(student.id),
+    15000
+  ).then(() => waitForElement("#SDD-QV-FullScheduleLink", null, 15000))
+   .then(element => {
+     if (element) launchOnePager();
+     else console.warn("Timed out waiting for the selected student's Quick View.");
    });
-
 }
 
 
@@ -652,11 +767,19 @@ studentSelect.value = getCurrentStudentId();
 
 function getCurrentStudentInfo() {
 
-const rows = $("#classRosterResultsGrid").jqGrid("getRowData"); 
-
-return rows.find(r =>
-String(r.StudentId).trim() === String(currentStudent.id).trim()
-);
+try {
+  if (window.jQuery && $("#classRosterResultsGrid").length &&
+      $("#classRosterResultsGrid").jqGrid) {
+    const rows = $("#classRosterResultsGrid").jqGrid("getRowData") || [];
+    const match = rows.find(r =>
+      String(r.StudentId).trim() === String(currentStudent.id).trim()
+    );
+    if (match) return match;
+  }
+} catch (error) {
+  // Main-page class selection uses the fetched roster record below.
+}
+return currentStudent?.record || {};
 
 } 
 
@@ -752,15 +875,16 @@ currentStudent = student;
 
 studentSelect.value = student.id;
 
-$("#SDD-ViewableStudentsList")
-.val(student.id)
-.change();
+const drawer = window.SunGard?.Tac?.StudentDetailsDrawer;
+if (!drawer) return;
+drawer.Open(student.id);
 
 waitForElement(
-"#SDD-StudentId",
-() => getText("SDD-StudentId") == currentStudent.id
+  "#SDD-StudentId",
+  () => getText("SDD-StudentId") === String(currentStudent.id),
+  15000
 ).then(() => {
-refreshStudent();
+  refreshStudent();
 }); 
 
 }
@@ -955,3 +1079,5 @@ showStudentPicker();
 
 
 
+
+})();
