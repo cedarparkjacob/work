@@ -194,7 +194,7 @@ async function initializeOnePager() {
       alert("No students were found for the selected class.");
       return;
     }
-    await initializeOnePager();
+    await showStudentPicker();
   } catch (error) {
     console.error("One Pager class loading failed:", error);
     alert("Unable to load the selected class roster. See the console for details.");
@@ -1071,13 +1071,5 @@ updateInfoBar();
 
 }
 
-showStudentPicker(); 
-
-
-
-
-
-
-
-
+initializeOnePager();
 })();
