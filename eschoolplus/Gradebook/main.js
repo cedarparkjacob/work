@@ -23,22 +23,23 @@
   const studentMap = new Map(students.map(student => [String(student.StudentId), student]));
   const inputMap = new Map();
   const assignmentMap = new Map();
-  const columnModel = $("#GradebookGrid").jqGrid("getGridParam", "colModel") || [];
 
-  function getAssignmentName(input) {
-    const describedBy = input.closest("td")?.getAttribute("aria-describedby") || "";
-    const columnName = describedBy.replace(/^GradebookGrid_/, "");
-    const column = columnModel.find(item => item.name === columnName);
-    const header = columnName
-      ? document.getElementById(`jqgh_GradebookGrid_${columnName}`)
-      : null;
-    return String(
-      column?.label ||
-      header?.textContent ||
-      input.getAttribute("title") ||
-      input.getAttribute("aria-label") ||
-      ""
-    ).trim();
+  function getAssignmentHeader(assessment) {
+    const container = document.querySelector(
+      `[asmt_number="${CSS.escape(String(assessment))}"]`
+    );
+    const titleElement = container?.querySelector(".GradebookAssessmentHeaderText");
+    return {
+      container,
+      name: String(
+        titleElement?.getAttribute("description") ||
+        titleElement?.textContent ||
+        ""
+      ).trim(),
+      dueDate: String(
+        container?.querySelector(".GradebookAssessmentHeaderDate")?.textContent || ""
+      ).trim()
+    };
   }
 
   for (const input of inputs) {
@@ -46,12 +47,15 @@
     const assessment = input.getAttribute("asmtnumber");
     if (!studentId || !assessment) continue;
     inputMap.set(`${studentId}|${assessment}`, input);
-    if (!assignmentMap.has(assessment)) assignmentMap.set(assessment, {
-      number: assessment,
-      group: input.getAttribute("asmtgroupnumber"),
-      dueDate: input.getAttribute("asmtduedate"),
-      name: getAssignmentName(input)
-    });
+    if (!assignmentMap.has(assessment)) {
+      const header = getAssignmentHeader(assessment);
+      assignmentMap.set(assessment, {
+        number: assessment,
+        group: input.getAttribute("asmtgroupnumber"),
+        dueDate: header.dueDate || input.getAttribute("asmtduedate"),
+        name: header.name || `Assignment A${assessment}`
+      });
+    }
   }
 
   function normalize(value) {
