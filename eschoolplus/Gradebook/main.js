@@ -23,6 +23,23 @@
   const studentMap = new Map(students.map(student => [String(student.StudentId), student]));
   const inputMap = new Map();
   const assignmentMap = new Map();
+  const columnModel = $("#GradebookGrid").jqGrid("getGridParam", "colModel") || [];
+
+  function getAssignmentName(input) {
+    const describedBy = input.closest("td")?.getAttribute("aria-describedby") || "";
+    const columnName = describedBy.replace(/^GradebookGrid_/, "");
+    const column = columnModel.find(item => item.name === columnName);
+    const header = columnName
+      ? document.getElementById(`jqgh_GradebookGrid_${columnName}`)
+      : null;
+    return String(
+      column?.label ||
+      header?.textContent ||
+      input.getAttribute("title") ||
+      input.getAttribute("aria-label") ||
+      ""
+    ).trim();
+  }
 
   for (const input of inputs) {
     const studentId = input.getAttribute("studentid");
@@ -32,7 +49,8 @@
     if (!assignmentMap.has(assessment)) assignmentMap.set(assessment, {
       number: assessment,
       group: input.getAttribute("asmtgroupnumber"),
-      dueDate: input.getAttribute("asmtduedate")
+      dueDate: input.getAttribute("asmtduedate"),
+      name: getAssignmentName(input)
     });
   }
 
@@ -82,11 +100,13 @@
   function downloadSpreadsheet() {
     const assignments = [...assignmentMap.values()].sort((a, b) => Number(a.number) - Number(b.number));
     const headers = ["StudentId", "StudentName", ...assignments.map(a => `A${a.number}${a.dueDate ? `_${a.dueDate}` : ""}`)];
+    // A dedicated second row carries human-readable names without changing the upload identifiers.
+    const assignmentNames = ["", "Assignment names", ...assignments.map(a => a.name || `Assignment A${a.number}`)];
     const csvEscape = value => {
       const text = String(value ?? "");
       return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     };
-    const csvRows = [headers];
+    const csvRows = [headers, assignmentNames];
     for (const student of students) {
       const studentId = student.StudentId;
       if (studentId == null) continue;
@@ -212,6 +232,8 @@
       if (!row.some(v => String(v ?? "").trim() !== "")) continue;
       const studentId = String(row[idIndex] ?? "").trim();
       const studentName = nameIndex >= 0 ? String(row[nameIndex] ?? "").trim() : "";
+      // Ignore the descriptive second row created by this exporter.
+      if (!studentId && studentName === "Assignment names") continue;
       if (!studentId) { errors.push(`CSV row ${r + 1}: missing StudentId.`); continue; }
       if (seenStudents.has(studentId)) { errors.push(`CSV row ${r + 1}: duplicate StudentId ${studentId}.`); continue; }
       seenStudents.add(studentId);
